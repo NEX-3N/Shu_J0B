@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Task Manager & Scheduler</title>
+    <!-- ใช้ Tailwind CSS สำหรับ UI ที่สวยงามและใช้งานง่าย -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Libraries สำหรับการ Export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; }
+        .task-item { cursor: grab; transition: transform 0.1s; }
+        .task-item:active { cursor: grabbing; transform: scale(0.98); }
+        .drop-zone { min-height: 60px; transition: background-color 0.2s; }
+        .drop-zone.drag-over { background-color: #e5e7eb; border: 2px dashed #3b82f6; }
+        /* ซ่อนปุ่มลบตอน Export */
+        .exporting .delete-btn { display: none !important; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-6xl mx-auto space-y-6">
+        
+        <!-- Header & Controls -->
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-800">📋 ระบบจัดตารางงานประจำวัน</h1>
+                <p class="text-gray-500 text-sm mt-1">ลากและวางงานลงในช่วงเวลาที่ต้องการ</p>
+            </div>
+            
+            <div class="flex flex-wrap items-center gap-3 bg-gray-50 p-3 rounded-lg border border-gray-200">
+                <label class="text-sm font-medium text-gray-700">ตั้งค่าเวลา:</label>
+                <select id="startTime" class="border rounded px-2 py-1 text-sm outline-none focus:ring-2 ring-blue-400">
+                    <option value="6">06:00</option><option value="7">07:00</option>
+                    <option value="8" selected>08:00</option><option value="9">09:00</option>
+                </select>
+                <span>ถึง</span>
+                <select id="endTime" class="border rounded px-2 py-1 text-sm outline-none focus:ring-2 ring-blue-400">
+                    <option value="15">15:00</option><option value="16">16:00</option>
+                    <option value="17" selected>17:00</option><option value="18">18:00</option>
+                    <option value="19">19:00</option><option value="20">20:00</option>
+                </select>
+                <button onclick="generateTimetable()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded text-sm transition-colors">อัปเดตตาราง</button>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+            
+            <!-- Left Panel: Task Pool -->
+            <div class="md:col-span-1 bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                <h2 class="font-bold text-gray-700 mb-4 border-b pb-2">📦 กล่องพักงาน (Task Pool)</h2>
+                
+                <div class="flex gap-2 mb-4">
+                    <input type="text" id="taskInput" placeholder="พิมชื่องานที่นี่..." class="w-full border rounded px-3 py-2 text-sm outline-none focus:ring-2 ring-blue-400" onkeypress="handleKeyPress(event)">
+                    <button onclick="addTask()" class="bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded text-sm transition-colors">+</button>
+                </div>
+
+                <div id="taskPool" class="drop-zone flex flex-col gap-2 min-h-[300px] p-2 bg-gray-50 rounded border border-gray-200" ondrop="drop(event)" ondragover="allowDrop(event)" ondragleave="dragLeave(event)">
+                    <!-- งานใหม่จะมาปรากฏที่นี่ -->
+                </div>
+            </div>
+
+            <!-- Right Panel: Timetable -->
+            <div class="md:col-span-3 bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                <div class="flex justify-between items-center mb-4 border-b pb-2">
+                    <h2 class="font-bold text-gray-700">🕒 ตารางงานประจำวัน</h2>
+                    <div class="flex gap-2">
+                        <button onclick="exportData('image')" class="bg-gray-800 hover:bg-gray-900 text-white px-3 py-1.5 rounded text-xs">📸 Image</button>
+                        <button onclick="exportData('pdf')" class="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded text-xs">📄 PDF</button>
+                        <button onclick="exportData('excel')" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded text-xs">📊 Excel</button>
+                        <button onclick="exportData('word')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs">📝 Word</button>
+                    </div>
+                </div>
+
+                <div id="timetableContainer" class="bg-white p-2">
+                    <!-- ตารางเวลาถูกสร้างด้วย JavaScript -->
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // --- 1. การจัดการข้อมูล (Logic & Variables) ---
+        let taskIdCounter = 0;
+
+        // ฟังก์ชันสร้างตารางเวลาตามช่วงเวลาที่กำหนด
+        function generateTimetable() {
+            const start = parseInt(document.getElementById('startTime').value);
+            const end = parseInt(document.getElementById('endTime').value);
+            const container = document.getElementById('timetableContainer');
+            
+            // ใช้ตัวแปรเก็บ HTML ชั่วคราวเพื่อประสิทธิภาพ (ลดการวาดหน้าจอซ้ำ)
+            let htmlContent = `<div class="border rounded-lg overflow-hidden"><table class="w-full text-left border-collapse" id="scheduleTable">
+                <thead class="bg-gray-100 text-gray-700">
+                    <tr><th class="w-24 p-3 border-b border-r text-center">เวลา</th><th class="p-3 border-b">รายการงานที่ต้องทำ</th></tr>
+                </thead><tbody>`;
+
+            for (let i = start; i <= end; i++) {
+                const timeStr = `${i.toString().padStart(2, '0')}:00 - ${(i+1).toString().padStart(2, '0')}:00`;
+                htmlContent += `
+                    <tr>
+                        <td class="p-3 border-b border-r text-center font-medium text-gray-600 bg-gray-50 align-top">${timeStr}</td>
+                        <td class="p-2 border-b bg-white align-top">
+                            <div class="drop-zone h-full w-full rounded p-1 flex flex-wrap gap-2" data-time="${timeStr}" ondrop="drop(event)" ondragover="allowDrop(event)" ondragleave="dragLeave(event)"></div>
+                        </td>
+                    </tr>`;
+            }
+            htmlContent += `</tbody></table></div>`;
+            container.innerHTML = htmlContent;
+        }
+
+        // --- 2. ระบบเพิ่มและลบงาน ---
+        function addTask() {
+            const input = document.getElementById('taskInput');
+            const text = input.value.trim();
+            if (!text) return;
+
+            taskIdCounter++;
+            const taskId = `task-${taskIdCounter}`;
+            
+            // สร้าง Element ใหม่ด้วย DOM 
+            const taskEl = document.createElement('div');
+            taskEl.id = taskId;
+            taskEl.className = 'task-item bg-white border border-blue-200 shadow-sm rounded p-2 text-sm flex justify-between items-center w-full md:w-auto break-all';
+            taskEl.draggable = true;
+            taskEl.ondragstart = drag;
+            
+            taskEl.innerHTML = `
+                <span class="mr-2 text-gray-800">▪ ${text}</span>
+                <span class="delete-btn text-red-400 hover:text-red-600 cursor-pointer text-lg font-bold px-1" onclick="this.parentElement.remove()">×</span>
+            `;
+
+            document.getElementById('taskPool').appendChild(taskEl);
+            input.value = '';
+        }
+
+        function handleKeyPress(e) {
+            if (e.key === 'Enter') addTask();
+        }
+
+        // --- 3. ระบบ Drag & Drop ---
+        function allowDrop(ev) {
+            ev.preventDefault();
+            ev.currentTarget.classList.add('drag-over');
+        }
+
+        function dragLeave(ev) {
+            ev.currentTarget.classList.remove('drag-over');
+        }
+
+        function drag(ev) {
+            ev.dataTransfer.setData("text", ev.target.id);
+        }
+
+        function drop(ev) {
+            ev.preventDefault();
+            ev.currentTarget.classList.remove('drag-over');
+            const data = ev.dataTransfer.getData("text");
+            const draggedElement = document.getElementById(data);
+            
+            if (draggedElement && ev.currentTarget.classList.contains('drop-zone')) {
+                ev.currentTarget.appendChild(draggedElement);
+            }
+        }
+
+        // --- 4. ระบบ Export ไฟล์ ---
+        async function exportData(type) {
+            const container = document.getElementById('timetableContainer');
+            // เพิ่ม class เพื่อซ่อนปุ่มลบ (กากบาท) ก่อนทำการ Export
+            container.classList.add('exporting'); 
+
+            try {
+                if (type === 'image') {
+                    const canvas = await html2canvas(container, { scale: 2 });
+                    const link = document.createElement("a");
+                    link.download = "schedule.png";
+                    link.href = canvas.toDataURL("image/png");
+                    link.click();
+                } 
+                else if (type === 'pdf') {
+                    const { jsPDF } = window.jspdf;
+                    const canvas = await html2canvas(container, { scale: 2 });
+                    const imgData = canvas.toDataURL('image/png');
+                    const pdf = new jsPDF('p', 'mm', 'a4');
+                    const pdfWidth = pdf.internal.pageSize.getWidth();
+                    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+                    pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+                    pdf.save("schedule.pdf");
+                }
+                else if (type === 'excel') {
+                    // จัดเตรียมข้อมูลจาก HTML Table ให้อยู่ในรูป Array สำหรับ Excel
+                    let ws_data = [['ช่วงเวลา', 'งานที่ต้องทำ']];
+                    const rows = document.querySelectorAll('#scheduleTable tbody tr');
+                    rows.forEach(row => {
+                        const time = row.cells[0].innerText;
+                        // ดึงเฉพาะ Text จาก task-item (ข้ามปุ่ม x)
+                        const tasks = Array.from(row.cells[1].querySelectorAll('.task-item span:first-child'))
+                                           .map(span => span.innerText.replace('▪ ', ''))
+                                           .join(', ');
+                        ws_data.push([time, tasks]);
+                    });
+                    const wb = XLSX.utils.book_new();
+                    const ws = XLSX.utils.aoa_to_sheet(ws_data);
+                    XLSX.utils.book_append_sheet(wb, ws, "Schedule");
+                    XLSX.writeFile(wb, "schedule.xlsx");
+                }
+                else if (type === 'word') {
+                    const header = "<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>Schedule</title><style>table{width:100%;border-collapse:collapse;}th,td{border:1px solid #ccc;padding:8px;text-align:left;vertical-align:top;}</style></head><body><h2>ตารางงานประจำวัน</h2>";
+                    const footer = "</body></html>";
+                    
+                    // สร้าง Table HTML ใหม่แบบคลีนๆ สำหรับ Word
+                    let cleanTable = "<table><tr><th>ช่วงเวลา</th><th>งานที่ต้องทำ</th></tr>";
+                    const rows = document.querySelectorAll('#scheduleTable tbody tr');
+                    rows.forEach(row => {
+                        const time = row.cells[0].innerText;
+                        const tasks = Array.from(row.cells[1].querySelectorAll('.task-item span:first-child'))
+                                           .map(span => span.innerText.replace('▪ ', ''))
+                                           .join('<br>');
+                        cleanTable += `<tr><td>${time}</td><td>${tasks}</td></tr>`;
+                    });
+                    cleanTable += "</table>";
+
+                    const html = header + cleanTable + footer;
+                    const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = 'schedule.doc';
+                    link.click();
+                    URL.revokeObjectURL(url);
+                }
+            } catch (err) {
+                console.error("Export Error:", err);
+                alert("เกิดข้อผิดพลาดในการ Export");
+            } finally {
+                // เอา class ออกเพื่อให้ปุ่มลบกลับมาแสดงเหมือนเดิม
+                container.classList.remove('exporting');
+            }
+        }
+
+        // เรียกใช้งานครั้งแรกเมื่อเปิดหน้าเว็บ
+        window.onload = generateTimetable;
+    </script>
+</body>
+</html>
